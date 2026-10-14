@@ -381,7 +381,7 @@ invalidated and rebuilt under the ≤3 cap with the new content.
 
 **Every Persian string the app can say is a pre-recorded MP3 that ships in the
 repository** — 2,271 recordings plus 557 slower 🐢 variants (2,828 clips,
-≈17 MB). Nothing is synthesised while the app runs and nothing is fetched from
+≈20 MB of MP3 — about five minutes of speech). Nothing is synthesised while the app runs and nothing is fetched from
 the network, so pronunciation is identical on every phone, tablet and desktop,
 and the whole course works completely offline.
 
@@ -420,6 +420,8 @@ voice `fa`), from the same strings the app itself produces:
 ```bash
 python3 tools/build_audio.py                  # rebuild everything (~15 s)
 python3 tools/build_audio.py --only-missing   # just new/changed strings
+python3 tools/build_audio.py --report r.txt   # before/after IPA for every word
+python3 tools/test_pron.py                    # verify the pronunciation rules
 node tools/audit_audio.mjs                    # verify every 🔊 has a file
 ```
 
@@ -433,6 +435,35 @@ installed system-wide.
 After editing `data.js`, `sentences.js` or `verbs.js`, re-run the builder and
 `git add audio`; `node tools/audit_audio.mjs` then fails loudly if any 🔊
 button would be silent.
+
+### Persian pronunciation model
+
+eSpeak's stock Persian voice is fluent but puts the stress on the wrong
+syllable (`ketâb` → *ké-tâb*), which is exactly what a beginner copies. The
+builder therefore **compiles a corrected Persian dictionary** and renders the
+whole pack with it:
+
+- `tools/pron_rules.py` decides the stress for each word — final syllable by
+  default, the `می`/`نمی` prefix in verb forms, `دارم/خواهم/بودم/…` on the
+  first syllable, `رفته‌ام/رفته‌ای/…` on the participle — and rewrites the
+  eSpeak mnemonic lines accordingly.
+- `tools/pron/overrides.txt` is the hand-editable list for anything the rules
+  get wrong: `!first`, `!last`, `!penult`, `!none` (leave eSpeak alone),
+  `@respell` (write it the way it should sound) or `mn:` (raw phonemes).
+- `tools/pron/ezafe.txt` adds the ‑e linker that eSpeak drops
+  (`شب یلدا` → `šab-e yaldâ`, `آب خنک` → `âb-e xonak`, …).
+- The compiled dictionary is checked by reading every override back out of
+  eSpeak before any audio is written; a mismatch aborts the build, so the pack
+  can never silently ship an unapplied correction.
+- `python3 tools/test_pron.py` re-runs that check and asserts the stress
+  positions, that only stress moved (no vowel or consonant damage), that all
+  ezafe phrases are audible, and prints how many clips the rules changed
+  (2,060 of 2,271 today).
+
+Honest limitation: 184 of the 594 words containing a ZWNJ (نیم‌فاصله, e.g.
+`مهمان‌نوازی`) cannot be overridden — eSpeak only matches the joined spelling
+and joining changes the segments, so those words keep eSpeak's own stress. The
+list is in `--report FILE` output; the rest of the corpus is corrected.
 
 ---
 
@@ -465,7 +496,9 @@ persian-app/
 │                 #   bundled-audio player (🔊/🐢) + device-voice fallback
 ├── audio/        # 2,828 pre-recorded Persian MP3s (≈17 MB), hash-sharded
 │   └── index.js  #   generated manifest: "فارسی" -> "audio/xx/<hash>.mp3"
-├── tools/        # build_audio.py (pack builder), collect_strings.mjs,
+├── tools/        # build_audio.py (pack builder), pron_rules.py + pron/
+                #   (pronunciation rules & overrides), test_pron.py,
+                #   collect_strings.mjs,
 │                 #   audit_audio.mjs, browser_test.mjs (jsdom), app_sandbox.mjs
 └── readme.md     # this file
 ```
@@ -566,6 +599,13 @@ that load the real data + app code and assert, over **all 320 lessons**:
   scans every generated 🔊 button, then checks each manifest entry against the
   files on disk — currently 2,262 distinct spoken strings, 2,828 clips, 0
   device-voice fallbacks.
+- **the pronunciation is right, not just present:** `python3 tools/test_pron.py`
+  recompiles the corrected dictionary and checks that all 998 overrides are
+  active, that 17 hand-picked words carry the stress Persian actually uses
+  (کتاب ketấb, می‌روم míravam, نمی‌روم né-miravam, رفته‌ام rafté-am …), that the
+  correction only moved stress and never a vowel or consonant, and that all 30
+  ezafe phrases are audible. It also prints how many clips changed (2,060 of
+  2,271 today).
 - **the page really plays that audio:** `node tools/browser_test.mjs` (jsdom,
   needs `npm i jsdom`) serves the site, loads `index.html`, clicks every 🔊/🐢
   of a lesson and asserts each click plays exactly the file the manifest
@@ -580,6 +620,11 @@ that load the real data + app code and assert, over **all 320 lessons**:
   for words and sentences) — there is no choice of accent or speaker yet. Text
   typed in the admin editor stays on the device voice until the pack is rebuilt
   (§11).
+- **184 ZWNJ words keep eSpeak's own stress** (مهمان‌نوازی, نمی‌روم-style forms
+  already handled — the remainder are compounds whose joined spelling changes
+  the sounds, so overriding them would sound worse than leaving them): the
+  stress model covers the whole corpus except those, listed by
+  `python3 tools/build_audio.py --report file`.
 - **Progress is per-device** (`localStorage`) — no accounts or cloud sync;
   clearing browser data resets progress and admin edits.
 - **Sentence preference:** sentence exercises prefer real sentences

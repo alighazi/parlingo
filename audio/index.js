@@ -2833,4 +2833,4 @@ const FA_AUDIO_SLOW = {
 "یک":"audio/51/51d8e17737c051cb-slow.mp3",
 "یک چای لطفاً.":"audio/d4/d4728ffa9e5fb019-slow.mp3",
 };
-const FA_AUDIO_META = {"voice": "espeak-ng fa", "rate": 135, "slowRate": 95, "bitrateKbps": 32, "clips": 2271, "slowClips": 557};
+const FA_AUDIO_META = {"engine": "espeak-ng fa", "rate": 135, "slowRate": 95, "bitrateKbps": 32, "pron": "auto", "rules": "8497e45b1163", "words": 998, "dictsource": "d8dc00b0887d", "fingerprint": "acd2467275f0", "clips": 2271, "slowClips": 557};

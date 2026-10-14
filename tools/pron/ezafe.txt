@@ -1,0 +1,47 @@
+# =============================================================================
+# FarsiGo — ezafe linker (نشانهٔ اضافه) for the bundled audio
+# =============================================================================
+# Persian links a noun to a following adjective / name / possessor with a short
+# -e: "šab-e yaldâ" (شب یلدا), "nân-e tâze" (نان تازه). eSpeak-NG only produces
+# it when the text spells it out, so the pairs below are synthesised with a
+# kasra (ـِ) written in:  شبِ یلدا → ʃab-e jaldâ.
+#
+# Format:  <how it appears in the app> <TAB> <how it should be spoken>
+# Rules of thumb: add an entry when a noun is followed by its adjective, by a
+# name/possessor (شب یلدا، گلستان سعدی), or by "این/آن" (آشپزِ این رستوران).
+# Do NOT add one between a pronoun/preposition and a noun (تو بهترین…, از کرج).
+#
+# Rebuild the affected clips:  python3 tools/build_audio.py --only-missing
+# Listen to one:               pnpm? no — run tools/pron_rules.py "شب یلدا"
+# =============================================================================
+
+آب خنک	آبِ خنک
+اخبار امروز	اخبارِ امروز
+آشپز این	آشپزِ این
+باغ ما	باغِ ما
+بلیط قطار	بلیطِ قطار
+تاریخ ایران	تاریخِ ایران
+تخم مرغ	تخمِ مرغ
+جلسه ساعت	جلسهی ساعت
+خانم مدیر	خانمِ مدیر
+دوست من	دوستِ من
+زبان جدید	زبانِ جدید
+زبان فارسی	زبانِ فارسی
+سال نو	سالِ نو
+ساعت ده	ساعتِ ده
+شب یلدا	شبِ یلدا
+شعر حافظ	شعرِ حافظ
+صبح زود	صبحِ زود
+فصل سال	فصلِ سال
+قلب خانه	قلبِ خانه
+گل قرمز	گلِ قرمز
+گلستان سعدی	گلستانِ سعدی
+ماشین بزرگ	ماشینِ بزرگ
+ماه کامل	ماهِ کامل
+ماهی قرمز	ماهیِ قرمز
+نان تازه	نانِ تازه
+نوروز باستانی	نوروزِ باستانی
+هوای تهران	هوایِ تهران
+پارک نزدیک	پارکِ نزدیک
+کتاب فارسی	کتابِ فارسی
+کلاس زبان	کلاسِ زبان
