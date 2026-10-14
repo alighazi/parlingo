@@ -63,12 +63,16 @@ if command -v rsync >/dev/null 2>&1; then
   $SUDO rsync -a --delete \
     --include='index.html' --include='style.css' --include='app.js' \
     --include='data.js' --include='sentences.js' --include='verbs.js' \
-    --include='readme.md' --exclude='*' \
+    --include='readme.md' \
+    --include='audio/' --include='audio/**' \
+    --exclude='*' \
     "$APP_DIR/" "$DEPLOY_DIR/"
 else
   for f in index.html style.css app.js data.js sentences.js verbs.js readme.md; do
     [ -f "$APP_DIR/$f" ] && $SUDO cp -a "$APP_DIR/$f" "$DEPLOY_DIR/$f"
   done
+  # the bundled Persian audio pack (thousands of small MP3s)
+  [ -d "$APP_DIR/audio" ] && $SUDO cp -a "$APP_DIR/audio" "$DEPLOY_DIR/audio"
 fi
 $SUDO chown -R www-data:www-data "$DEPLOY_DIR" 2>/dev/null || \
   $SUDO chown -R nginx:nginx "$DEPLOY_DIR" 2>/dev/null || \
@@ -99,6 +103,12 @@ server {
     location ~* \.(?:css|js)$ {
         expires 7d;
         add_header Cache-Control "public, max-age=604800";
+        access_log off;
+    }
+    # Bundled Persian audio: content-hashed file names, safe to cache for long
+    location ~* \.mp3$ {
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000, immutable";
         access_log off;
     }
     location = /index.html {

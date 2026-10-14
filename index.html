@@ -60,5 +60,7 @@
   <div id="sheet" class="hidden"></div>
   <div id="toast" class="hidden"></div>
 </div>
-<script src="data.js"></script><script src="sentences.js"></script><script src="verbs.js"></script><script src="app.js"></script>
+<script src="data.js"></script><script src="sentences.js"></script><script src="verbs.js"></script><script src="audio/index.js"></script><script src="app.js"></script>
+<script>// warm the browser cache with the first lesson's clips so the first 🔊 is instant
+addEventListener('load',()=>{try{let w=UNITS[0][6][0][1],s=(typeof FA_AUDIO!=='undefined')?FA_AUDIO[w]:null;if(s){let a=new Audio();a.preload='auto';a.src=s}}catch(e){}});</script>
 </body></html>
