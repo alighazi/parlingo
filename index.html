@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>FarsiGo — Learn Persian</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <span class="stat flag">🇮🇷 <b>FA</b></span>
+    <span class="stat streak">🔥 <b id="streak">1</b></span>
+    <span class="stat gems">💎 <b id="xp">0</b> XP</span>
+    <span class="stat hearts">❤️ <b id="heartsTop">5</b></span>
+    <button id="adminBtn" onclick="toggleAdmin()">🔐 Admin</button>
+  </header>
+  <div id="adminBanner" class="hidden">🛠️ ADMIN MODE — all lessons unlocked • unlimited hearts • tap ✏️ Edit on any lesson to change its content <button onclick="toggleAdmin()">Exit admin</button></div>
+
+  <main id="learnView">
+    <div id="path"></div>
+    <div class="finishNote">🎉 32 units • 320 lessons • 3,200 exercises<br><small>Complete a lesson to unlock the next. Progress saves on this device.</small></div>
+  </main>
+
+  <main id="editView" class="hidden">
+    <div class="lessonTop"><button class="x" onclick="closeEditor()">✕</button><h2 style="margin:0;font-size:19px">✏️ Edit Lesson</h2></div>
+    <div class="editForm">
+      <p class="hint" id="editMeta" style="margin-top:0"></p>
+      <label>English word / concept<input id="f_en" class="typeBox"></label>
+      <label>Persian (Farsi script)<input id="f_fa" class="typeBox" dir="rtl" lang="fa"></label>
+      <label>Transliteration<input id="f_tr" class="typeBox"></label>
+      <label>Example sentence — Persian<input id="f_exFa" class="typeBox" dir="rtl" lang="fa"></label>
+      <label>Example sentence — English<input id="f_exEn" class="typeBox"></label>
+      <label>Grammar title<input id="f_gTitle" class="typeBox"></label>
+      <label>Grammar explanation<textarea id="f_gText" class="typeBox" rows="3"></textarea></label>
+      <label>Grammar example<textarea id="f_gEx" class="typeBox" rows="2"></textarea></label>
+      <label>Iranian culture / tradition note<textarea id="f_culture" class="typeBox" rows="3"></textarea></label>
+      <label>Unit theme (applies to the whole unit)<input id="f_theme" class="typeBox"></label>
+      <button class="speakBtn" onclick="previewEdit()">👀 Preview teach card</button>
+      <div id="editPreview"></div>
+      <button class="primary" onclick="saveEditor()" style="margin-top:16px">💾 SAVE LESSON</button>
+      <button class="dangerBtn" onclick="resetEditor()">↩️ Reset this lesson to original</button>
+      <button class="ghostBtn" onclick="closeEditor()">Cancel</button>
+    </div>
+  </main>
+
+  <main id="lessonView" class="hidden">
+    <div class="lessonTop">
+      <button class="x" onclick="quitLesson()">✕</button>
+      <div class="progressOuter"><div id="progressBar"></div></div>
+      <span class="heartsIn">❤️ <b id="heartsIn">5</b></span>
+    </div>
+    <div id="exerciseArea"></div>
+    <div id="feedback" class="hidden"></div>
+    <footer id="lessonFooter"><button id="checkBtn" class="primary disabled" onclick="onMainButton()">CHECK</button></footer>
+  </main>
+
+  <nav id="bottomNav">
+    <button class="nav active" onclick="showLearn()">🏠<span>Learn</span></button>
+    <button class="nav" onclick="showUnits()">📚<span>Units</span></button>
+    <button class="nav" onclick="showPractice()">🎧<span>Listen</span></button>
+    <button class="nav" onclick="showProfile()">👤<span>Profile</span></button>
+  </nav>
+
+  <div id="sheet" class="hidden"></div>
+  <div id="toast" class="hidden"></div>
+</div>
+<script src="data.js"></script><script src="sentences.js"></script><script src="verbs.js"></script><script src="app.js"></script>
+</body></html>

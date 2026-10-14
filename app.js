@@ -1,0 +1,355 @@
+// ---------- state ----------
+let store=JSON.parse(localStorage.getItem('farsiGo')||'{"done":{},"xp":0,"streak":1}');
+if(!store.custom)store.custom={}; if(!store.customUnits)store.customUnits={}; if(store.admin===undefined)store.admin=false;
+const isAdmin=()=>!!store.admin;
+// Effective lesson content = original data merged with any admin edits (saved on this device)
+function effWord(ui,li){let w=UNITS[ui][6][li],c=store.custom[ui+'-'+li]||{};return [c.en||w[0],c.fa||w[1],c.tr||w[2]]}
+function effTeach(ui,li){
+ let w=effWord(ui,li),u=UNITS[ui],cu=store.customUnits[ui]||{},c=store.custom[ui+'-'+li]||{},g0=GRAMMAR[Math.min(globalIdx(ui,li),GRAMMAR.length-1)];
+ let rs=REAL_SENTENCES[ui][li%REAL_SENTENCES[ui].length];
+ return {w, theme:cu.theme||u[4], culture:c.culture||cu.culture||u[5],
+  exFa:c.exFa||rs.fa, exEn:c.exEn||rs.en,
+  gTitle:c.gTitle||g0[0], gText:c.gText||g0[1], gEx:c.gEx||g0[2]};
+}
+const save=()=>{localStorage.setItem('farsiGo',JSON.stringify(store));document.getElementById('xp').textContent=store.xp;document.getElementById('streak').textContent=store.streak};
+let S=null; // lesson session
+const $=id=>document.getElementById(id);
+const norm=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[âā]/g,'a').replace(/[ŝ]/g,'s').replace(/[^a-z0-9\u0600-\u06FF]/g,'');
+function seeded(u,l){let x=(u+1)*1000+(l+1)*77+13;return()=>{x=(x*9301+49297)%233280;return x/233280}}
+function shuffle(a,r){a=[...a];for(let i=a.length-1;i>0;i--){let j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+// ---------- text-to-speech ----------
+// Uses the device's own voices. Persian needs a fa-IR voice installed —
+// many phones/desktops don't ship one, so we pick the best available voice,
+// warn once if there is no Persian voice, and work around Chrome's
+// cancel()-then-speak() bug (speaking in the same tick is often dropped).
+let _voices=[],_ttsWarned=false;
+function loadVoices(){try{_voices=window.speechSynthesis?speechSynthesis.getVoices():[]}catch(e){_voices=[]}return _voices}
+if('speechSynthesis' in window){loadVoices();try{speechSynthesis.onvoiceschanged=loadVoices}catch(e){}}
+function faVoice(){let v=loadVoices();return v.find(x=>/^fa([-_]|$)/i.test(x.lang))||v.find(x=>/persian|farsi/i.test(x.name))||null}
+function ttsToast(msg){let el=$('toast');if(!el)return;el.textContent=msg;el.classList.remove('hidden');clearTimeout(el._h);el._h=setTimeout(()=>el.classList.add('hidden'),6000)}
+function speak(t){
+ if(!('speechSynthesis' in window)){ttsToast('🔇 This browser has no text-to-speech (speechSynthesis). Try Chrome or Safari.');return}
+ let u=new SpeechSynthesisUtterance(t);
+ let fv=faVoice();
+ if(fv){u.voice=fv;u.lang=fv.lang}
+ else{
+   u.lang='fa-IR';
+   if(!_ttsWarned){_ttsWarned=true;ttsToast('🔇 No Persian (fa-IR) voice is installed on this device, so pronunciation may be silent or wrong. Add one: iPhone/iPad — Settings › Accessibility › Spoken Content › Voices › Persian; Android/Chrome — a Google TTS Persian voice; Windows — Settings › Speech › Add voices › Persian.')}
+ }
+ u.rate=.82;u.pitch=1;
+ u.onerror=e=>{if(e.error&&e.error!=='canceled'&&e.error!=='interrupted')ttsToast('🔇 Speech failed ('+e.error+'). Tap the 🔊 button to try again.')};
+ try{
+   if(speechSynthesis.speaking||speechSynthesis.pending){speechSynthesis.cancel();setTimeout(()=>{try{speechSynthesis.resume();speechSynthesis.speak(u)}catch(e){}},90)}
+   else{speechSynthesis.resume();speechSynthesis.speak(u)}
+ }catch(e){ttsToast('🔇 Text-to-speech is not available here.')}
+}
+let _wordsCache=null,_exCache=null;
+function invalidateCaches(){_wordsCache=null;_exCache=null;try{_usage=new Map();_planned=0}catch(e){}}
+const allWords=()=>_wordsCache||(_wordsCache=UNITS.flatMap((u,ui)=>u[6].map((w,wi)=>({w:effWord(ui,wi),ui,wi}))));
+
+// ---------- path ----------
+function globalIdx(u,l){return u*10+l}
+function isUnlocked(u,l){if(isAdmin())return true;if(u===0&&l===0)return true;let p=globalIdx(u,l)-1;return !!store.done[Math.floor(p/10)+'-'+(p%10)]||!!store.done[u+'-'+l]}
+function renderPath(){
+ $('xp').textContent=store.xp;$('streak').textContent=store.streak;
+ let h='';
+ UNITS.forEach((u,ui)=>{
+  h+=`<div class="unitBanner" style="background:${u[2]}"><div><h2>Unit ${ui+1}: ${u[0]}</h2><p>${u[3]} • ${(store.customUnits[ui]||{}).theme||u[4]}</p></div><div style="text-align:center"><div class="emoji">${u[1]}</div><button onclick="unitInfo(${ui})">GUIDEBOOK</button></div></div><div class="pathUnit">`;
+  const off=[0,-52,-78,-52,0,52,78,52,0,-40];
+  u[6].forEach((w,li)=>{
+   let done=store.done[ui+'-'+li],un=isUnlocked(ui,li);
+   h+=`<div class="nodeWrap" style="transform:translateX(${off[li]}px)"><button class="node ${done?'done':''} ${un?'':'locked'}" style="background:${u[2]}" onclick="startLesson(${ui},${li})">${done?'👑':un?(li===9?'🏆':'⭐'):'🔒'}</button><div class="nodeLabel">${done?'<span class="crown">✔ </span>':''}Lesson ${li+1}<br>${effWord(ui,li)[0]}${store.custom[ui+'-'+li]?' 📝':''}</div>${isAdmin()?`<button class="editBtn" onclick="openEditor(${ui},${li})">✏️ Edit</button>`:''}</div>`;
+  });
+  h+='</div>';
+ });
+ $('path').innerHTML=h;
+}
+function unitInfo(ui){let u=UNITS[ui];openSheet(`<h2>${u[1]} Unit ${ui+1}: ${u[0]}</h2><p><b>🌸 Culture:</b> ${u[5]}</p><p><b>💬 Theme:</b> ${u[4]}</p><p><b>🏃 Unit verb:</b> ${VERBS[ui][0]} — ${VERBS[ui][1]} — ${VERBS[ui][2]} (all 9 tenses × 6 persons across the unit)</p><p><b>Words in this unit:</b></p>${u[6].map(w=>`<div class="unitRow"><span style="font-size:22px">${w[1]}</span><span><b>${w[2]}</b><br><small>${w[0]}</small></span></div>`).join('')}<br><button class="primary" onclick="closeSheet();startLesson(${ui},0)">START UNIT</button>`)}
+
+// ---------- exercise generation ----------
+// All sentences come ONLY from REAL_SENTENCES / GRAMMAR_SENTENCES — natural
+// sentences as actually used in Iran. Nothing is machine-assembled from words.
+function realBank(ui){return REAL_SENTENCES.slice(0,ui+1).flatMap((arr,unit)=>arr.map(s=>({...s,unit})))}
+function pickReal(ui,prefer,salt,variant){
+ let bank=realBank(ui);
+ let hit=bank.filter(s=>(prefer||[]).some(w=>w&&s.fa.includes(w[1].split(' ')[0])));
+ let pool=(hit.length&&(variant||0)<3)?hit:bank;
+ return pool[(Math.abs(salt|0)+(variant||0)*13)%pool.length];
+}
+function sentenceFor(w,r,ui,variant){return pickReal(ui||0,[w],Math.floor(r()*997),variant)}
+function combinedSentence(a,b,ui,salt,variant){return pickReal(ui||0,[a,b],salt,variant)} // name kept: now returns a real sentence using old/new vocab where one exists
+function grammarSentence(w,gi,ui){return GRAMMAR_SENTENCES[gi%GRAMMAR_SENTENCES.length]}
+// ---------- cumulative curriculum ----------
+// Everything up to (and including) the current lesson, in teaching order.
+function curriculum(ui,li){
+ const g=globalIdx(ui,li), all=allWords();
+ return {g, learned:all.filter(x=>globalIdx(x.ui,x.wi)<=g), prev:all.filter(x=>globalIdx(x.ui,x.wi)<g),
+         grammarCount:Math.min(GRAMMAR.length,g+1), // Unit 1 introduces the 10 grammar patterns; later lessons reuse & combine them all
+         unitThemes:UNITS.slice(0,ui+1).map(u=>u[0])};
+}
+// Systematic spaced picks from ALL earlier lessons (recent + oldest units),
+// rotating every lesson so every earlier word keeps coming back.
+function cumulativePicks(prev,g,count,r,variant){
+ if(!prev.length)return[];
+ let out=[],start=(Math.floor(r()*prev.length)+(variant||0)*count)%prev.length,step=Math.max(1,Math.floor(prev.length/count));
+ for(let i=0;i<count;i++) out.push(prev[(start+i*step)%prev.length].w);
+ return out;
+}
+
+// ---- unit verb drills: 3 of every lesson's 10 exercises ----
+// Lessons 1-9 each focus on one tense/aspect; Lesson 10 mixes all nine.
+// Persons rotate so all 6 persons are drilled across the unit, and the pick
+// exercise always shows all 6 persons as options.
+function verbExercises(ui,li,r){
+ const v=VERBS[ui],g=globalIdx(ui,li);
+ const tenses=li<9?[li,li,li]:[g%9,(g+3)%9,(g+6)%9];
+ const persons=[g%6,(g+2)%6,(g+4)%6];
+ const F=(ti,p)=>conjugate(v,ti,p);
+ const allForms=ti=>[0,1,2,3,4,5].map(p=>F(ti,p));
+ let fA=F(tenses[0],persons[0]),fB=F(tenses[1],persons[1]),fC=F(tenses[2],persons[2]);
+ return [
+  {kind:'pick',verb:true,title:`🏃 Unit verb ${v[0]} (${v[1]} = ${v[2]}) — ${fA.tense}: pick the correct form`,prompt:`${fA.pronEn} (${fA.pronTr}) — ${v[2]}`,options:shuffle(allForms(tenses[0]).map(f=>f.fa),r),answer:fA.fa,rtl:true,speak:fA.fa},
+  {kind:'type',verb:true,title:`🏃 Unit verb ${v[0]} — ${fB.tense}: type it in Persian`,prompt:`“${fB.en}” (${v[2]})`,answer:fB.tr,accept:[fB.tr,fB.fa],hint:`Person: <b>${fB.pronEn} — ${fB.pronFa} (${fB.pronTr})</b> • Tense: <b>${fB.tense}</b>. Type transliteration <b>${fB.tr}</b> or Persian ${fB.fa}.`,speak:fB.fa},
+  {kind:'pick',verb:true,listen:true,title:`🎧🏃 Listen to the unit verb ${v[0]} — ${fC.tense}: who is doing it?`,speak:fC.fa,options:shuffle(allForms(tenses[2]).map(f=>f.en),r),answer:fC.en}
+ ];
+}
+function rawBuildExercises(ui,li,variant){
+ variant=variant||0;
+ const r=seeded(ui+variant*131,li+variant*17),unit=UNITS[ui],word=effWord(ui,li);
+ const {g,prev,grammarCount}=curriculum(ui,li);
+ const distract=(w,n=3)=>{let A=allWords(),out=[],guard=0;while(out.length<n&&guard++<60){let c=A[Math.floor(r()*A.length)].w;if(c[0]!==w[0]&&!out.includes(c))out.push(c)}return out};
+ const pickEx=(w,title,review)=>{let pool=distract(w);return r()>.45
+   ?{kind:'pick',title,prompt:w[1],promptFa:true,options:shuffle([w,...pool],r).map(x=>x[0]),answer:w[0],speak:w[1],review}
+   :{kind:'pick',title,prompt:w[0],options:shuffle([w,...pool],r).map(x=>x[1]),answer:w[1],rtl:true,speak:w[1],review}};
+ const buildEx=(s,title,review)=>({kind:'build',title,prompt:s.en,fa:s.fa,tokens:shuffle(s.fa.split(' '),r),answer:s.fa,speak:s.fa,review});
+ const cum=cumulativePicks(prev,g,6,r,variant); const vx=verbExercises(ui,li,r);           // 6 spaced words from ALL previous lessons/units
+ const old=cum[0]||word, older=cum[1]||word;        // partners for combined sentences
+ let ex=[
+  // 1–2 · today's new word
+  pickEx(word,'🆕 New word — translate this'),
+  {kind:'type',title:'🆕 New word — type this in Persian',prompt:word[0],answer:word[2],accept:[word[2],word[1]],hint:`Type the transliteration <b>${word[2]}</b> or Persian script ${word[1]}.`,speak:word[1]},
+  // 3–4 · cumulative vocabulary from previous lessons & units (spaced repetition)
+  pickEx(old,'⭐ Builds on earlier lessons — translate this',true),
+  pickEx(older,'⭐ Builds on earlier lessons — translate this',true),
+  // 5 · sentence with today's word (templates learned in Unit 1)
+  buildEx(sentenceFor(word,r,ui,variant),'🗣️ Real Persian — build this sentence'),
+  // 6 · combined sentence: today's word + a word from a previous lesson/unit
+  buildEx(combinedSentence(word,old,ui,g+variant*11,variant),'🗣️ Real Persian from earlier lessons — build it',true),
+  // 7 · grammar in context: a pattern you have already learned, applied to earlier vocab
+  vx[0],
+  // 8 · typing from an earlier lesson (not just today)
+  vx[1],
+  // 9 · listening: combined old + new sentence, translate to English
+  (()=>{let s=combinedSentence(word,cum[4]||older,ui,g+3+variant*11,variant),others=shuffle(realBank(ui).filter(x=>x.en!==s.en),r).slice(0,3).map(x=>x.en);return{kind:'pick',title:'🎧 Listen & translate — real Persian',listen:true,speak:s.fa,options:shuffle([s.en,...others],r),answer:s.en,review:true}})(),
+  // 10 · listening or typing on today's word in a full learned sentence
+  vx[2],
+ ];
+ return ex.slice(0,10);
+}
+
+// ---- repetition cap: an exercise (same kind + prompt + spoken text + answer)
+// may appear at most 3 times in the ENTIRE 320-lesson curriculum, and never
+// twice in one lesson. Lessons are planned in teaching order (incrementally);
+// each slot takes the first variant that is still under the cap, and a capped
+// exercise is converted to another form (pick <-> type <-> listen <-> build)
+// or swapped for a fresh real sentence until it is under the cap.
+function exerciseSig(e){return [e.kind,e.listen?'listen':'',e.prompt||'',e.speak||'',e.kind==='type'?(e.accept||[e.answer])[0]:e.answer].join('|')}
+let _usage=new Map(),_planned=0;
+function wordOpts(w,r,fa){let A=allWords(),out=[],g=0;while(out.length<3&&g++<60){let c=A[Math.floor(r()*A.length)].w;if(c[0]!==w[0]&&!out.some(o=>o[0]===c[0]))out.push(c)}return fa?shuffle([w,...out],r).map(x=>x[1]):shuffle([w,...out],r).map(x=>x[0])}
+function sentenceForms(s,r){
+ let others=shuffle(realBank(31).filter(x=>x.en!==s.en),r).slice(0,3).map(x=>x.en);
+ return [
+  {kind:'build',title:'🗣️ Real Persian — build this sentence',prompt:s.en,fa:s.fa,tokens:shuffle(s.fa.split(' '),r),answer:s.fa,speak:s.fa},
+  {kind:'pick',title:'🗣️ Real Persian — pick the translation',prompt:s.fa,promptFa:true,options:shuffle([s.en,...others],r),answer:s.en,speak:s.fa},
+  {kind:'pick',title:'🎧 Listen & translate — real Persian',listen:true,speak:s.fa,options:shuffle([s.en,...others],r),answer:s.en},
+  {kind:'type',title:'🎧 Listen to the real sentence & type its English translation',listen:true,speak:s.fa,answer:s.en,accept:[s.en],hint:'Type the full English translation.'}
+ ];
+}
+function wordForms(w,r){
+ return [
+  {kind:'pick',title:'Translate this word',prompt:w[1],promptFa:true,options:wordOpts(w,r,false),answer:w[0],speak:w[1]},
+  {kind:'pick',title:'Translate this word',prompt:w[0],options:wordOpts(w,r,true),answer:w[1],rtl:true,speak:w[1]},
+  {kind:'type',title:'Type this in Persian',prompt:w[0],answer:w[2],accept:[w[2],w[1]],hint:`Type the transliteration <b>${w[2]}</b> or Persian script ${w[1]}.`,speak:w[1]},
+  {kind:'pick',title:'🎧 Listen and pick the meaning',listen:true,speak:w[1],options:wordOpts(w,r,false),answer:w[0]}
+ ];
+}
+function convertExercise(e,ui,gI,slot){
+ // alternative forms of the same content (same word / same real sentence)
+ let r=seeded(ui*3+slot+1,gI*7+slot+3);
+ let s=[...REAL_SENTENCES.flat(),...GRAMMAR_SENTENCES].find(x=>x.fa===e.answer||x.fa===e.speak||x.en===e.answer||x.en===(e.accept||[])[0]);
+ if(s)return sentenceForms(s,r);
+ let w=allWords().map(x=>x.w).find(x=>x[0]===e.answer||x[1]===e.answer||x[0]===e.prompt||x[1]===e.prompt||x[1]===e.speak||x[2]===(e.accept||[])[0]);
+ if(w)return wordForms(w,r);
+ return [];
+}
+function planLesson(gI){
+ let ui=Math.floor(gI/10),li=gI%10,chosen=[],used=new Set();
+ let ok=e=>{let s=exerciseSig(e);return ( _usage.get(s)||0)<3&&!used.has(s)};
+ for(let v=0;v<40&&chosen.length<10;v++){
+   let cand=rawBuildExercises(ui,li,v);
+   for(let i=0;i<10;i++){if(!chosen[i]&&ok(cand[i])){chosen[i]=cand[i];used.add(exerciseSig(cand[i]))}}
+ }
+ // repair any remaining slots by converting to another exercise form
+ for(let i=0;i<10;i++){
+   if(chosen[i])continue;
+   let base=rawBuildExercises(ui,li,0)[i],alts=convertExercise(base,ui,gI,i),done=false;
+   for(let a of alts){if(ok(a)){chosen[i]=a;used.add(exerciseSig(a));done=true;break}}
+   if(done)continue;
+   // fresh content: scan the whole real-sentence bank / word list for an unused form
+   let r=seeded(ui+9,gI*31+i+1),bank=realBank(ui);
+   for(let k=0;k<bank.length&&!chosen[i];k++){
+     let s=bank[(gI*7+i*29+k)%bank.length];
+     for(let a of sentenceForms(s,r)){if(ok(a)){chosen[i]=a;used.add(exerciseSig(a));break}}
+   }
+   if(!chosen[i]){let A=allWords();for(let k=0;k<A.length&&!chosen[i];k++){let w=A[(gI*11+i*17+k)%A.length].w;for(let a of wordForms(w,r)){if(ok(a)){chosen[i]=a;used.add(exerciseSig(a));break}}}}
+   if(!chosen[i])chosen[i]=base; // unreachable in practice (verified by audit)
+ }
+ chosen.forEach(e=>{let s=exerciseSig(e);_usage.set(s,(_usage.get(s)||0)+1)});
+ return chosen;
+}
+function ensureUpTo(g){if(!_exCache)_exCache=[];while(_planned<=g){_exCache.push(planLesson(_planned));_planned++}}
+function buildExercises(ui,li){let g=globalIdx(ui,li);ensureUpTo(g);return _exCache[g]}
+
+// ---------- lesson flow ----------
+function startLesson(ui,li){
+ if(!isUnlocked(ui,li)){openSheet(`<h2>🔒 Locked</h2><p>Finish the lesson before this one to unlock <b>Unit ${ui+1} • Lesson ${li+1}</b>.</p><button class="primary" onclick="closeSheet()">GOT IT</button>`);return}
+ S={ui,li,ex:buildExercises(ui,li),step:-1,hearts:isAdmin()?Infinity:5,selected:null,built:[],checked:false,mistakes:0,missed:[],inRetry:false,retryQueue:[],retryPos:0,missedCount:0,retryMistakes:0,retried:0};
+ $('learnView').classList.add('hidden');$('bottomNav').classList.add('hidden');$('topbar').classList.add('hidden');$('lessonView').classList.remove('hidden');
+ renderStep();
+}
+function quitLesson(){$('lessonView').classList.add('hidden');$('bottomNav').classList.remove('hidden');$('topbar').classList.remove('hidden');$('learnView').classList.remove('hidden');renderPath();window.scrollTo(0,0)}
+function renderStep(){
+ $('feedback').className='hidden';S.checked=false;S.selected=null;S.built=[];
+ let total=S.ex.length, pct=S.step<0?0:(S.step/total)*100;$('progressBar').style.width=pct+'%';$('heartsIn').textContent=isAdmin()?'∞':S.hearts;
+ let btn=$('checkBtn');
+ if(S.step<0){
+   let u=UNITS[S.ui],cur=curriculum(S.ui,S.li),et=effTeach(S.ui,S.li),w=et.w;
+   let isNewGrammar=cur.g<GRAMMAR.length;
+   let recent=cur.prev.slice(-6).map(x=>x.w), combo=cur.prev.length?pickReal(S.ui,[w,cur.prev[cur.prev.length-1].w],cur.g):null;
+   let vb=VERBS[S.ui],vti=tenseOfLesson(S.li);
+   let vrows=vti>=0?[0,1,2,3,4,5].map(p=>{let f=conjugate(vb,vti,p);return `<tr><td>${f.pronEn}</td><td class="vfa">${f.pronFa} ${f.fa}</td><td class="vtr">${f.tr}</td></tr>`}).join('')
+                    :TENSES.map((tn,ti)=>{let f=conjugate(vb,ti,0);return `<tr><td>${tn[0]}</td><td class="vfa">${f.pronFa} ${f.fa}</td><td class="vtr">${f.tr} — ${f.en}</td></tr>`}).join('');
+   $('exerciseArea').innerHTML=`<div class="teachCard"><div style="color:#888;font-weight:800">NEW LESSON • UNIT ${S.ui+1}.${S.li+1} • #${cur.g+1} OF 320</div><div class="faBig">${w[1]}</div><div class="translit">${w[2]}</div><div class="enBig">${w[0]}</div><button class="speakBtn" onclick="speak('${w[1]}')">🔊 Listen</button>
+   ${isAdmin()?`<button class="editBtn" onclick="openEditor(${S.ui},${S.li},true)">✏️ Edit this lesson</button>`:''}
+   <div class="example"><span class="fa">${et.exFa}</span>${et.exEn}</div>
+   ${combo?`<div class="example"><b>🗣️ A real sentence from what you've covered so far:</b><span class="fa">${combo.fa}</span>${combo.en}</div>`:''}
+   <div class="tip grammar"><b>📐 ${isNewGrammar?'New grammar':'Grammar in action'}: ${et.gTitle}</b><br>${et.gText}<br><b>${et.gEx}</b><br><small>Grammar known so far: ${GRAMMAR.slice(0,cur.grammarCount).map(x=>x[0]).join(' • ')}</small></div>
+   <div class="verbBox"><b>🏃 Unit verb: ${vb[0]} — ${vb[1]} — ${vb[2]}</b><br>
+   ${vti>=0?`<b>Lesson focus: ${TENSES[vti][0]}</b> — ${TENSES[vti][1]}<br><i>${TENSES[vti][2]}</i>`:`<b>Lesson 10: mixed review of all 9 tenses</b> (1st-person forms below — you have drilled all 6 persons in Lessons 1–9)`}
+   <table class="verbTable">${vrows}</table>
+   <small>3 of today's 10 exercises drill this verb. Across this unit you will meet it in the <b>past, present and future — simple, continuous and perfect</b> — in <b>all 6 persons</b> (من، تو، او، ما، شما، آن‌ها).</small></div>
+   <div class="tip culture"><b>🌸 Iranian culture</b><br>${et.culture}<br><i>${et.theme}</i></div>
+   <div class="tip" style="background:#ffeef7"><b>⭐ This lesson builds on everything before it</b><br>
+   Words learned so far: <b>${cur.prev.length}</b> (+ this one) across <b>${cur.unitThemes.length} unit(s)</b>: ${cur.unitThemes.join(' • ')}<br>
+   ${recent.length?`Recent words you'll keep practising: ${recent.map(x=>`${x[1]} (${x[0]})`).join('، ')}<br>`:''}
+   <small>Today's 10 exercises mix this new word with earlier vocabulary and grammar — and every sentence is a real Persian sentence from the units you've covered, never a machine-made combination.</small></div></div>`;
+   btn.textContent='START EXERCISES';btn.className='primary';return;
+ }
+ if(!S.inRetry&&S.step>=total){
+   if(S.missed.length){S.inRetry=true;S.retryQueue=[...S.missed];S.missedCount=S.missed.length;S.retryPos=0;S.missed=[]}
+   else{finish();return}
+ }
+ if(S.inRetry&&S.retryPos>=S.retryQueue.length){finish();return}
+ let e=S.inRetry?S.retryQueue[S.retryPos]:S.ex[S.step];
+ let h=S.inRetry
+  ?`<div style="color:#e07b00;font-weight:800;font-size:13px">↩️ MISTAKE REVIEW ${S.retryPos+1} / ${S.retryQueue.length}</div><div class="tip" style="background:#fff1d6;margin:10px 0 4px"><b>↩️ Let's try that again!</b><br><small>You missed ${S.missedCount} exercise${S.missedCount===1?'':'s'} the first time — here's another chance. ${S.retryMistakes?'Miss it again and it will come back once more at the end of this review.':''}</small></div><h1 class="q">${e.title}</h1>`
+  :`<div style="color:#888;font-weight:800;font-size:13px">EXERCISE ${S.step+1} / ${total} ${e.review?'• REVIEW':''}</div><h1 class="q">${e.title}</h1>`;
+ if(e.listen)h+=`<div class="listenHero"><button class="listenBtn" onclick="speak('${e.speak}')">🔊</button><p class="hint">Tap to listen (Persian voice)</p></div>${isAdmin()?`<div class="adminTranscript"><small>🛠️ ADMIN — SPOKEN TEXT (VISIBLE ONLY IN ADMIN MODE)</small>${e.speak}</div>`:''}`;
+ if(e.prompt)h+=`<div style="font-size:${e.promptFa?'38px':'24px'};${e.promptFa?'direction:rtl;text-align:right;':''}font-weight:800;margin:10px 0 16px">${e.prompt} ${e.speak&&!e.listen?`<button class="speakBtn" style="margin:0;padding:7px 10px" onclick="speak('${e.speak}')">🔊</button>`:''}</div>`;
+ if(e.kind==='pick')h+=e.options.map(o=>`<button class="option ${e.rtl?'rtl':''}" onclick="pick(this,'${o.replace(/'/g,"\\'")}')">${o}</button>`).join('');
+ if(e.kind==='build')h+=`<div class="wordBank" id="built" dir="rtl" lang="fa">${''}</div><div class="bank" dir="rtl" lang="fa">${e.tokens.map((t,i)=>`<button class="chip" id="chip${i}" onclick="tapChip(${i},'${t}')">${t}</button>`).join('')}</div><p class="hint">Tap words in order — your sentence builds right-to-left, as Persian is read. Tap a placed word to remove it.</p>`;
+ if(e.kind==='type')h+=`<input class="typeBox" id="typeInput" dir="auto" lang="fa" placeholder="Type your answer…" autocomplete="off" oninput="enableCheck()">${e.hint?`<p class="hint">${e.hint}</p>`:''}`;
+ $('exerciseArea').innerHTML=h;btn.textContent='CHECK';btn.className='primary disabled';
+ if(e.listen)setTimeout(()=>speak(e.speak),350);
+}
+function enableCheck(){let v=$('typeInput').value.trim();$('checkBtn').className='primary'+(v?'':' disabled');S.selected=v}
+function pick(el,val){document.querySelectorAll('.option').forEach(x=>x.classList.remove('sel'));el.classList.add('sel');S.selected=val;$('checkBtn').className='primary'}
+function tapChip(i,t){S.built.push({i,t});$('chip'+i).classList.add('used');drawBuilt()}
+function removeBuilt(j){let b=S.built.splice(j,1)[0];$('chip'+b.i).classList.remove('used');drawBuilt()}
+function drawBuilt(){$('built').innerHTML=S.built.map((b,j)=>`<button class="chip" onclick="removeBuilt(${j})">${b.t}</button>`).join('');$('checkBtn').className='primary'+(S.built.length?'':' disabled')}
+function userAnswer(e){if(e.kind==='build')return S.built.map(b=>b.t).join(' ');if(e.kind==='type')return $('typeInput')?.value.trim();return S.selected}
+function isCorrect(e){let a=userAnswer(e);if(a==null)return false;if(e.kind==='build')return a===e.answer;if(e.kind==='type')return e.accept.some(x=>norm(x)===norm(a));return a===e.answer}
+function correctText(e){return e.kind==='type'?e.accept.join('  /  '):e.answer}
+function curEx(){return S.inRetry?S.retryQueue[S.retryPos]:S.ex[S.step]}
+function onMainButton(){
+ if(S.step<0){S.step=0;renderStep();return}
+ if(S.checked){if(S.inRetry)S.retryPos++;else S.step++;renderStep();return}
+ let e=curEx();if(userAnswer(e)==null||userAnswer(e)===''||(e.kind==='build'&&!S.built.length))return;
+ let ok=isCorrect(e);S.checked=true;let f=$('feedback');
+ if(ok){if(S.inRetry)S.retried++;f.className='good';f.innerHTML=`🎉 Excellent! Correct.${S.inRetry?' Mistake fixed! ✅':''}<br><small>${e.speak||''}</small>`;if(e.speak)speak(e.speak.split(' ').slice(0,6).join(' '))}
+ else{
+   if(S.inRetry){S.retryMistakes++;S.retryQueue.push(e)} // missed again in review -> one more turn at the end of the review round
+   else{if(!isAdmin())S.hearts=Math.max(0,S.hearts-1);S.mistakes++;if(!S.missed.includes(e))S.missed.push(e)}
+   $('heartsIn').textContent=isAdmin()?'∞':S.hearts;f.className='bad';
+   f.innerHTML=`❌ Correct answer:<br>${correctText(e)} ${e.speak?`<button class="speakBtn" style="margin:0;padding:5px 9px" onclick="speak('${e.speak}')">🔊</button>`:''}<br><small>${S.inRetry?'↩️ This one will come back again at the end of the review.':'↩️ You will get another chance to answer this at the end of the lesson.'}</small>`;
+ }
+ let last=S.inRetry?(S.retryPos>=S.retryQueue.length-1):(S.step===S.ex.length-1&&!S.missed.length);
+ let b=$('checkBtn');b.textContent=last?'FINISH':'CONTINUE';b.className='primary';
+ $('progressBar').style.width=(S.inRetry?((S.retryPos+1)/S.retryQueue.length*100):((S.step+1)/S.ex.length*100))+'%';
+}
+function finish(){
+ let key=S.ui+'-'+S.li,first=!store.done[key];store.done[key]=true;let gain=first?20:5;store.xp+=gain;save();
+ $('progressBar').style.width='100%';
+ $('exerciseArea').innerHTML=`<div class="doneHero"><div class="big">🏆</div><h1>Lesson Complete!</h1><p>Unit ${S.ui+1} • Lesson ${S.li+1}: <b>${effWord(S.ui,S.li)[0]}</b> (${effWord(S.ui,S.li)[1]})</p><div class="xpGain">+${gain} XP ${first?'':'• replay bonus'} &nbsp;•&nbsp; ${S.mistakes===0?'Perfect! ⭐⭐⭐':S.mistakes<3?'Great job! ⭐⭐':'Keep practicing! ⭐'}</div>${S.missedCount?`<p style="background:#fff1d6;border-radius:12px;padding:12px"><b>↩️ Mistake review done!</b><br>You re-answered the ${S.missedCount} exercise${S.missedCount===1?'':'s'} you missed and got ${S.missedCount===1?'it':'them'} right in the end. 🎉</p>`:''}<p class="hint">${isAdmin()?'🛠️ Admin mode: unlimited hearts ❤️∞':`Hearts left: ${'❤️'.repeat(S.hearts)||'💔 — they refill next lesson!'}`}</p></div>`;
+ let b=$('checkBtn');b.textContent='CONTINUE';b.className='primary';b.onclick=()=>{b.onclick=onMainButton;quitLesson()};
+}
+
+// ---------- admin mode ----------
+function refreshAdminUI(){
+ let b=$('adminBtn'); if(b){b.textContent=isAdmin()?'🛠️ Admin ON':'🔐 Admin'; b.className=isAdmin()?'on':''; b.id='adminBtn'}
+ $('adminBanner').classList.toggle('hidden',!isAdmin());
+ $('heartsTop').textContent=isAdmin()?'∞':'5';
+}
+function toggleAdmin(){
+ store.admin=!store.admin; save(); refreshAdminUI(); renderPath();
+ if(isAdmin()) openSheet(`<h2>🛠️ Admin mode ON</h2><p>✅ <b>No locked lessons</b> — every lesson on the path is open.<br>✅ <b>Unlimited hearts</b> — mistakes never reduce hearts.<br>✅ Tap <b>✏️ Edit</b> under any lesson on the path (or inside a lesson) to open its <b>edit dashboard</b> and change its word, examples, grammar and culture content. Edits save on this device and immediately feed the lesson and all cumulative exercises that reuse that word.</p><button class="primary" onclick="closeSheet()">START EDITING</button>`);
+ window.scrollTo(0,0);
+}
+let E=null; // editor session {ui,li,fromLesson}
+function openEditor(ui,li,fromLesson){
+ E={ui,li,fromLesson:!!fromLesson}; let et=effTeach(ui,li),u=UNITS[ui];
+ $('learnView').classList.add('hidden');$('lessonView').classList.add('hidden');$('bottomNav').classList.add('hidden');$('topbar').classList.add('hidden');$('adminBanner').classList.add('hidden');
+ $('editView').classList.remove('hidden');$('editPreview').innerHTML='';
+ $('editMeta').innerHTML=`Unit ${ui+1}: ${u[0]} ${u[1]} • Lesson ${li+1} of 10 • Lesson #${globalIdx(ui,li)+1} of 320 ${store.custom[ui+'-'+li]?'• 📝 <b>edited</b> (saved on this device)':'• original content'}`;
+ $('f_en').value=et.w[0]; $('f_fa').value=et.w[1]; $('f_tr').value=et.w[2];
+ $('f_exFa').value=et.exFa; $('f_exEn').value=et.exEn;
+ $('f_gTitle').value=et.gTitle; $('f_gText').value=et.gText; $('f_gEx').value=et.gEx;
+ $('f_culture').value=et.culture; $('f_theme').value=et.theme;
+ window.scrollTo(0,0);
+}
+function readEditor(){
+ return {en:$('f_en').value.trim(),fa:$('f_fa').value.trim(),tr:$('f_tr').value.trim(),
+  exFa:$('f_exFa').value.trim(),exEn:$('f_exEn').value.trim(),gTitle:$('f_gTitle').value.trim(),
+  gText:$('f_gText').value.trim(),gEx:$('f_gEx').value.trim(),culture:$('f_culture').value.trim(),theme:$('f_theme').value.trim()};
+}
+function previewEdit(){
+ let v=readEditor();
+ $('editPreview').innerHTML=`<div class="teachCard" style="margin-top:14px"><div style="color:#888;font-weight:800">PREVIEW</div><div class="faBig">${v.fa}</div><div class="translit">${v.tr}</div><div class="enBig">${v.en}</div><button class="speakBtn" onclick="speak('${v.fa}')">🔊 Listen</button><div class="example"><span class="fa">${v.exFa}</span>${v.exEn}</div><div class="tip grammar"><b>📐 ${v.gTitle}</b><br>${v.gText}<br><b>${v.gEx}</b></div><div class="tip culture"><b>🌸 Iranian culture</b><br>${v.culture}<br><i>${v.theme}</i></div></div>`;
+}
+function saveEditor(){
+ let v=readEditor(); if(!v.en||!v.fa||!v.tr){alert('English, Persian and transliteration are all required.');return}
+ store.custom[E.ui+'-'+E.li]={en:v.en,fa:v.fa,tr:v.tr,exFa:v.exFa,exEn:v.exEn,gTitle:v.gTitle,gText:v.gText,gEx:v.gEx,culture:v.culture};
+ if(v.theme) store.customUnits[E.ui]={...(store.customUnits[E.ui]||{}),theme:v.theme,culture:v.culture};
+ invalidateCaches(); save(); let backToLesson=E.fromLesson,ui=E.ui,li=E.li; closeEditor();
+ if(backToLesson) startLesson(ui,li); // reload the lesson with the new content
+ alert(`✅ Saved! Unit ${ui+1} • Lesson ${li+1} now teaches "${v.en}" (${v.fa}). All exercises and cumulative review using this word have been updated.`);
+}
+function resetEditor(){
+ if(!confirm('Reset this lesson to its original content?'))return;
+ delete store.custom[E.ui+'-'+E.li]; invalidateCaches(); save(); openEditor(E.ui,E.li,E.fromLesson);
+}
+function closeEditor(){
+ $('editView').classList.add('hidden');$('bottomNav').classList.remove('hidden');$('topbar').classList.remove('hidden');
+ refreshAdminUI(); $('learnView').classList.remove('hidden'); renderPath(); window.scrollTo(0,0); E=null;
+}
+
+// ---------- nav / sheets ----------
+function openSheet(html){$('sheet').innerHTML=`<div class="sheetCard">${html}</div>`;$('sheet').classList.remove('hidden')}
+function closeSheet(){$('sheet').classList.add('hidden')}
+$('sheet').addEventListener('click',e=>{if(e.target.id==='sheet')closeSheet()});
+function showLearn(){closeSheet();window.scrollTo(0,0)}
+function showUnits(){openSheet(`<h2>📚 All 32 Units</h2>`+UNITS.map((u,i)=>`<div class="unitRow" onclick="closeSheet();startLesson(${i},0)"><span class="ic" style="background:${u[2]}22">${u[1]}</span><span><b>Unit ${i+1}: ${u[0]}</b><br><small>${Object.keys(store.done).filter(k=>k.startsWith(i+'-')).length}/10 lessons • ${u[5]}</small></span></div>`).join(''))}
+function showPractice(){let p=allWords()[Math.floor(Math.random()*allWords().length)].w;openSheet(`<h2>🎧 Listening Practice</h2><p>Listen and guess, then reveal:</p><div class="listenHero"><button class="listenBtn" onclick="speak('${p[1]}')">🔊</button></div><p style="text-align:center;font-size:26px"><b>${p[1]}</b> • ${p[2]}</p><details><summary>Reveal answer</summary><h3>${p[0]}</h3></details><br><button class="primary" onclick="showPractice()">ANOTHER ONE</button>`);setTimeout(()=>speak(p[1]),300)}
+function testVoice(){let fv=faVoice(),n=loadVoices().length;speak('سلام! چطوری؟');openSheet(`<h2>🔊 Voice check</h2><p>Voices on this device: <b>${n}</b></p><p>Persian (fa-IR) voice: <b>${fv?fv.name+' ('+fv.lang+')':'❌ none installed'}</b></p><p>${fv?'✅ You should have heard: سلام! چطوری؟ (Hello! How are you?)':'Without a Persian voice most browsers stay <b>silent</b> for Persian text. Install one:<br>• <b>iPhone/iPad:</b> Settings › Accessibility › Spoken Content › Voices › Persian (download)<br>• <b>Android:</b> Settings › Accessibility › Text-to-speech › Google engine, add Persian<br>• <b>Windows:</b> Settings › Time & language › Speech › Add voices › Persian<br>• <b>Mac:</b> System Settings › Accessibility › Spoken Content › System Voice › Manage Voices › Persian<br>Then reload this page and test again.'}</p><button class="primary" onclick="testVoice()">🔊 TEST AGAIN</button><br><br><button class="primary" onclick="closeSheet()">CLOSE</button>`)}
+function showProfile(){let done=Object.keys(store.done).length;openSheet(`<h2>👤 Your Profile</h2><p><button class="speakBtn" style="margin:0" onclick="testVoice()">🔊 Test Persian voice</button></p><p>🔥 Streak: <b>${store.streak} day(s)</b></p><p>💎 XP: <b>${store.xp}</b></p><p>✅ Lessons completed: <b>${done} / 320</b></p><div class="progressOuter"><div style="height:100%;background:#58cc02;width:${done/320*100}%"></div></div><br><button class="primary" onclick="if(confirm('Reset all progress?')){localStorage.removeItem('farsiGo');location.reload()}">RESET PROGRESS</button>`)}
+save();refreshAdminUI();renderPath();
