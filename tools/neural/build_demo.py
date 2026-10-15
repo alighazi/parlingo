@@ -354,7 +354,7 @@ def abc_page(uri) -> str:
       <span class="tr">{gloss}</span></div>{''.join(tracks)}</div>""")
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FarsiGo — neural voice vs. the shipped eSpeak pack</title>
+<title>FarsiGo — neural voice vs. the previous eSpeak pack</title>
 <style>{STYLE}</style></head><body><main>
 <h1>Neural voice vs. the previous eSpeak pack</h1>
 <p class="sub">Same Persian text, three renderings — headphones recommended. This page is the record of the choice: the app now ships column B.</p>
