@@ -10,7 +10,8 @@ stored on the learner's own device in `localStorage`.
 > real-world example sentences + 10 grammar sentences · cumulative curriculum
 > with spaced repetition · no exercise repeats more than 3 times in the whole
 > course · mistake-review round at the end of every lesson · admin mode with a
-> per-lesson edit dashboard.
+> per-lesson edit dashboard · **2,828 Persian recordings bundled in `audio/`**
+> (2,271 clips + 557 slow 🐢 versions) so every 🔊 works offline on any device.
 
 ---
 
@@ -26,7 +27,7 @@ stored on the learner's own device in `localStorage`.
 8. [Real-world sentences only](#8-real-world-sentences-only)
 9. [Mistake review (second chance)](#9-mistake-review-second-chance)
 10. [Admin mode & the edit dashboard](#10-admin-mode--the-edit-dashboard)
-11. [Text-to-speech](#11-text-to-speech)
+11. [Bundled audio (🔊)](#11-bundled-audio-)
 12. [Screens & navigation](#12-screens--navigation)
 13. [Data model & file layout](#13-data-model--file-layout)
 14. [State & persistence](#14-state--persistence)
@@ -73,9 +74,9 @@ hearts, XP, streaks, and a winding path of lessons grouped into themed units.
 | Layout | Mobile-first, max width 480 px, bottom navigation, sticky headers |
 | Runtime | Vanilla HTML/CSS/JavaScript only — no frameworks, no build, no server code |
 | Persistence | `localStorage` only (per-device; no accounts, no sync) |
-| Audio | Device text-to-speech (`speechSynthesis`, `fa-IR`) — see §11 |
+| Audio | **2,828 pre-recorded MP3 clips bundled in `audio/`** (eSpeak-NG, voice `fa`) — see §11 |
 | Language direction | English UI is LTR; **all Persian sentence input/display is RTL** (`dir="rtl"`, `lang="fa"`) |
-| Offline | Works offline once the static files are cached/downloaded (TTS depends on device voices) |
+| Offline | Fully offline: all content **and all audio** are local files — no voices to install, no network |
 
 ### 2.3 Gamification
 
@@ -376,25 +377,139 @@ invalidated and rebuilt under the ≤3 cap with the new content.
 
 ---
 
-## 11. Text-to-speech
+## 11. Bundled audio (🔊)
 
-The app plays **no audio files**: it asks the device/browser to speak via
-`speechSynthesis` (`fa-IR`).
+**Every Persian string the app can say is a pre-recorded MP3 that ships in the
+repository** — 2,271 recordings plus 557 slower 🐢 variants (2,828 clips,
+≈16 MB of MP3 — about five minutes of speech). They are voiced by a **neural
+Persian voice** (Piper/VITS), see *Voices* below. Nothing is synthesised while the app runs and nothing is fetched from
+the network, so pronunciation is identical on every phone, tablet and desktop,
+and the whole course works completely offline.
 
-- The best installed Persian voice is selected automatically (voices may load
-  asynchronously — the app listens for `voiceschanged`).
-- Works around Chrome's "cancel-then-speak in the same tick is dropped" bug.
-- **If no Persian voice exists on the device, most browsers stay silent for
-  Persian text.** The app detects this and shows a 🔇 warning with install
-  instructions. **Profile → 🔊 Test Persian voice** reports the number of
-  voices and whether a Persian voice was found, and speaks «سلام! چطوری؟».
-- Installing a Persian voice:
-  - *iPhone/iPad:* Settings › Accessibility › Spoken Content › Voices › Persian
-  - *Android:* Settings › Accessibility › Text-to-speech › Google engine › Persian
-  - *Windows:* Settings › Time & language › Speech › Add voices › Persian
-  - *Mac:* System Settings › Accessibility › Spoken Content › System Voice › Manage Voices › Persian
-- Speech works best opening the page directly in Chrome/Safari; sandboxed
-  in-app preview frames can restrict speech in some browsers.
+| Recorded content | Clips | Example |
+|---|---|---|
+| Unit words (the 320 lesson targets) | 320 | `آب` — âb — water |
+| Real-world sentences + grammar sentences | 234 | `سلام! چطوری؟` — Hello! How are you? |
+| Every conjugation: 32 verbs × 9 tenses × 6 persons | 1,728 | `دارم می‌روم` — dâram miravam — I am going |
+| Grammar examples, teach-card sentences, RTL prompts & options | (in the above) | `کتابِ بزرگ` — the big book |
+
+How it works:
+
+- `audio/index.js` is a generated manifest mapping each Persian string to its
+  file (`audio/<xx>/<sha1>.mp3`), so the app never guesses a path. Keys are
+  whitespace-normalised, so text from the data files always matches.
+- **🔊** plays the recording, **🐢** plays it more slowly (words and sentences
+  only — 1,728 verb forms are normal speed).
+- Playback uses the browser's built-in `<audio>` support (MP3, mono,
+  22.05 kHz, 32 kbps) — no libraries, no Web Audio, no codecs to install.
+- One reused `<audio>` element means a new 🔊 always stops the previous one;
+  the current exercise's clip is pre-loaded, and iOS/Safari's "sound only
+  after a tap" rule is handled by unlocking playback with a silent clip on the
+  first tap of the session (so the automatic 🎧 prompts work from lesson 1).
+- **Custom text** — a word a teacher types in the admin editor — has no
+  recording yet. It falls back to the device's own Persian voice when one is
+  installed, with a short explanation when it is not. Rebuild the pack and it
+  gets a recording too.
+- **Profile → 🔊 Audio check** plays a sample and reports how many recordings
+  are bundled plus whether the device has its own Persian voice.
+
+### Rebuilding the audio pack
+
+The clips are generated by `tools/build_audio.py` from the same strings the app
+itself produces:
+
+```bash
+python3 tools/build_audio.py                  # rebuild the shipped voice (~2 min)
+python3 tools/build_audio.py --only-missing   # just new/changed strings
+python3 tools/build_audio.py --report r.txt   # before/after IPA for every word
+python3 tools/test_pron.py                    # verify the pronunciation rules
+node tools/audit_audio.mjs                    # verify every 🔊 has a file
+```
+
+**Building audio is separate from deploying.** `install.sh` only publishes the
+site (it copies `index.html`, `app.js`, the data files and the already-built
+`audio/` pack to the web root and writes an Nginx server block) — it never
+synthesises anything, with Piper or otherwise. Run it from the repository root:
+
+```bash
+./install.sh --install     # Debian/Ubuntu: installs Nginx, then deploys to :8080
+./install.sh               # Nginx already installed
+``` The pack is committed to the
+repository, so a deploy needs no model and no build step; re-render it only if
+the content or the voice changes.
+
+`build_audio.py` first runs `tools/collect_strings.mjs`, which loads the real
+app in a DOM stub and walks all 320 lessons to find every string that can be
+spoken (words, real sentences, all 1,728 conjugations, grammar examples). It
+then trims/normalises each waveform, gives it a clean ending and encodes it to
+MP3. Dependencies are fetched into `~/.cache/parlingo-tts` — nothing is
+installed system-wide.
+
+### Voices — eSpeak-NG or the neural Piper voice
+
+`--engine` picks the voice; the MP3s, the manifest and the app are identical
+either way, so switching is a one-command rebuild:
+
+| command | voice | notes |
+|---|---|---|
+| *(no flags — the default)* `--engine piper --piper-dict stock` | **neural** Piper (VITS), the model's own dictionary | what ships (2,828 clips, ≈16 MB, ≈2 min) |
+| `--engine piper --piper-dict corrected` | neural + FarsiGo's stress/ezafe rules | adds the ‑e linker (شبِ یلدا، آبِ خنک); the model reads the compiled dictionary |
+| `--engine espeak` | eSpeak-NG formant synthesis + the corrected dictionary | the previous pack; no model download, ~15 s |
+
+A bare `python3 tools/build_audio.py` therefore reproduces the shipped pack —
+same engine, dictionary, bitrate and model, which is what the fingerprint
+records, so `--only-missing` re-renders nothing after a fresh clone.
+
+Useful flags: `--slow-scale 1.4` (how much longer the 🐢 variant is),
+`--bitrate 48` (MP3 kbps; 32 for eSpeak, 48 for the neural voice),
+`--audio-dir DIR` (render somewhere else — handy for trying a voice without
+touching `audio/`), `--jobs N`.
+
+The neural voice is a 60 MB third-party model, fetched on demand from
+`codeload.github.com` (repo `gyroing/Persian-Piper-TTS-WebAssembly`, voice card
+`gyroing/Persian-Piper-Model-gyro`) — it is never committed, and only the MP3
+pack ships. `audio/build-info.json` records which engine, dictionary, bitrate
+and model fingerprint produced the pack. The builder refuses to finish if clips
+come out silent or stunted, and `--piper-dict corrected` additionally reads every
+override back out of the compiled dictionary before rendering. The listening
+comparison that led to this choice lives in `tools/neural/README.md`.
+
+```bash
+python3 tools/build_audio.py --engine espeak    # back to the previous voice
+```
+
+After editing `data.js`, `sentences.js` or `verbs.js`, re-run the builder and
+`git add audio`; `node tools/audit_audio.mjs` then fails loudly if any 🔊
+button would be silent.
+
+### Persian pronunciation model
+
+eSpeak's stock Persian voice is fluent but puts the stress on the wrong
+syllable (`ketâb` → *ké-tâb*), which is exactly what a beginner copies. The
+builder therefore **compiles a corrected Persian dictionary** and renders the
+whole pack with it:
+
+- `tools/pron_rules.py` decides the stress for each word — final syllable by
+  default, the `می`/`نمی` prefix in verb forms, `دارم/خواهم/بودم/…` on the
+  first syllable, `رفته‌ام/رفته‌ای/…` on the participle — and rewrites the
+  eSpeak mnemonic lines accordingly.
+- `tools/pron/overrides.txt` is the hand-editable list for anything the rules
+  get wrong: `!first`, `!last`, `!penult`, `!none` (leave eSpeak alone),
+  `@respell` (write it the way it should sound) or `mn:` (raw phonemes).
+- `tools/pron/ezafe.txt` adds the ‑e linker that eSpeak drops
+  (`شب یلدا` → `šab-e yaldâ`, `آب خنک` → `âb-e xonak`, …).
+- The compiled dictionary is checked by reading every override back out of
+  eSpeak before any audio is written; a mismatch aborts the build, so the pack
+  can never silently ship an unapplied correction.
+- `python3 tools/test_pron.py` re-runs that check and asserts the stress
+  positions, that only stress moved (no vowel or consonant damage), that all
+  ezafe phrases are audible, and prints how many clips the rules changed
+  (2,060 of 2,271 today).
+
+Honest limitation: 184 of the 594 words containing a ZWNJ (نیم‌فاصله, e.g.
+`مهمان‌نوازی`) cannot be overridden — eSpeak only matches the joined spelling
+and joining changes the segments, so those words keep eSpeak's own stress. The
+list is in `--report FILE` output; the rest of the corpus is corrected.
 
 ---
 
@@ -423,7 +538,14 @@ persian-app/
 ├── verbs.js      # VERBS[32] stems & English forms; TENSES[9]; PERSONS[6];
 │                 #   conjugate(verb, tenseIdx, personIdx) -> {fa, tr, en, ...}
 ├── app.js        # state, path rendering, exercise planner/generator,
-│                 #   lesson flow, mistake review, admin/editor, TTS
+│                 #   lesson flow, mistake review, admin/editor,
+│                 #   bundled-audio player (🔊/🐢) + device-voice fallback
+├── audio/        # 2,828 pre-recorded Persian MP3s (≈17 MB), hash-sharded
+│   └── index.js  #   generated manifest: "فارسی" -> "audio/xx/<hash>.mp3"
+├── tools/        # build_audio.py (pack builder), pron_rules.py + pron/
+                #   (pronunciation rules & overrides), test_pron.py,
+                #   collect_strings.mjs,
+│                 #   audit_audio.mjs, browser_test.mjs (jsdom), app_sandbox.mjs
 └── readme.md     # this file
 ```
 
@@ -493,8 +615,10 @@ clears the entry and reloads.
    and later lessons reusing that word update immediately; edited lessons
    show 📝 on the path.
 4. **↩️ Reset this lesson** deletes the override and restores original data.
-5. While in admin, use listening exercises to check TTS: the spoken text is
-   shown, so you can verify what learners will hear.
+5. While in admin, the spoken text of every listening exercise is shown, and
+   🔊/🐢 play the bundled recording. **Text you have just typed has no
+   recording yet** — until the pack is rebuilt (see §11) the app falls back to
+   the device's Persian voice for it.
 
 ---
 
@@ -515,14 +639,43 @@ that load the real data + app code and assert, over **all 320 lessons**:
   داریم می‌رویم، رفته بودند، خواهد رفت) for all 32 verbs × 9 tenses × 6 persons;
 - the full lesson flow (answers, mistakes, mistake-review queue, XP, unlock)
   behaves as specified (§9), and admin mode unlocks everything, shows
-  transcripts, and propagates edits into later lessons.
+  transcripts, and propagates edits into later lessons;
+- **the audio pack is complete:** `node tools/audit_audio.mjs` plays all 320
+  lessons by answering every exercise correctly, renders every teach card and
+  scans every generated 🔊 button, then checks each manifest entry against the
+  files on disk — currently 2,262 distinct spoken strings, 2,828 clips, 0
+  device-voice fallbacks.
+- **the pronunciation is right, not just present:** `python3 tools/test_pron.py`
+  recompiles the corrected dictionary and checks that all 998 overrides are
+  active, that 17 hand-picked words carry the stress Persian actually uses
+  (کتاب ketấb, می‌روم míravam, نمی‌روم né-miravam, رفته‌ام rafté-am …), that the
+  correction only moved stress and never a vowel or consonant, and that all 30
+  ezafe phrases are audible. It also prints how many clips changed (2,060 of
+  2,271 today).
+- **the page really plays that audio:** `node tools/browser_test.mjs` (jsdom,
+  needs `npm i jsdom`) serves the site, loads `index.html`, clicks every 🔊/🐢
+  of a lesson and asserts each click plays exactly the file the manifest
+  promises, that the sample files answer 200 and that the sheets still work.
 
 ---
 
 ## 18. Known limitations
 
-- **TTS quality/availability depends on the device** (see §11); there is no
-  recorded audio and no offline voice bundled.
+- **The audio is a fixed recording set:** all 2,828 clips use one Persian voice
+  (neural Piper in the shipped pack, eSpeak-NG if rebuilt with `--engine espeak`)
+  at one speed (plus the 🐢 slow variant
+  for words and sentences) — there is no choice of accent or speaker yet. Text
+  typed in the admin editor stays on the device voice until the pack is rebuilt
+  (§11).
+- **The shipped pack uses the model's own dictionary** (`--piper-dict stock`),
+  chosen by ear: it does not insert the ezafe linker. Rebuild with
+  `--piper-dict corrected` to get the ‑e linker and FarsiGo's stress rules
+  (readme §11).
+- **184 ZWNJ words keep eSpeak's own stress** (مهمان‌نوازی, نمی‌روم-style forms
+  already handled — the remainder are compounds whose joined spelling changes
+  the sounds, so overriding them would sound worse than leaving them): the
+  stress model covers the whole corpus except those, listed by
+  `python3 tools/build_audio.py --report file`.
 - **Progress is per-device** (`localStorage`) — no accounts or cloud sync;
   clearing browser data resets progress and admin edits.
 - **Sentence preference:** sentence exercises prefer real sentences
@@ -543,7 +696,8 @@ that load the real data + app code and assert, over **all 320 lessons**:
 
 | Problem | Fix |
 |---|---|
-| No sound on 🔊 / listening exercises | See §11 — install a Persian voice, use Profile → 🔊 Test Persian voice. Open the page directly in Chrome/Safari (sandboxed previews can block speech). Check device volume / silent mode. |
+| No sound on 🔊 / listening exercises | The recordings ship with the app, so no Persian device voice is needed. Check device volume / silent mode, and that the `audio/` folder was deployed next to `index.html` (§11). When the page is embedded in a sandboxed preview, tap the page once first (browsers only allow sound after a tap). |
+| A word I typed in the admin editor is silent | Custom text has no recording until you rebuild the pack: `python3 tools/build_audio.py` (§11). Until then the device's own Persian voice is used, if one is installed. |
 | A lesson is locked | Finish the previous lesson (or enable 🔐 Admin mode to open everything). |
 | Hearts ran out | Hearts refill at the start of each lesson; mistakes in the review round cost nothing. Admin mode = unlimited hearts. |
 | My edits disappeared | Edits live in this browser's `localStorage`; check you are in the same browser/profile and didn't clear site data. Profile → Reset Progress also clears edits. |
@@ -554,8 +708,8 @@ that load the real data + app code and assert, over **all 320 lessons**:
 
 ## 20. Future work
 
-- Recorded/native audio (or a bundled TTS) so sound does not depend on
-  device voices.
+- More voices/accents for the audio pack (and 🐢 slow recordings for the verb
+  forms), plus per-user playback-speed control.
 - Accounts & cloud sync for progress and admin edits; exporting/importing
   custom lesson content (JSON) from the edit dashboard.
 - More real-world sentences per unit and sentence-level vocabulary glossing.

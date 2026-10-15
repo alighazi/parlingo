@@ -1,0 +1,43 @@
+# =============================================================================
+# FarsiGo — per-word pronunciation overrides (optional, hand-editable)
+# =============================================================================
+# The default rules in tools/pron_rules.py already fix the big problem (eSpeak
+# stresses Persian words on the wrong syllable). Use this file for the words
+# where the default rule is still not what you want to hear — you are the
+# native speaker, so this is the fastest way to make the audio right:
+#
+#   word <TAB> !first     stress the first syllable     (bérim, ná-kone)
+#   word <TAB> !last      stress the last syllable      (default for words)
+#   word <TAB> !penult    stress the second-to-last     (rafté-am)
+#   word <TAB> !none      keep eSpeak's own marking     (rare)
+#   word <TAB> @spelling  let eSpeak read this spelling instead (diacritics
+#                         and همزه change vowel quality: مِهمان → "mehmân")
+#   word <TAB> mn:<str>   give the phonemes yourself (eSpeak mnemonics, e.g.
+#                         mn:mamn'un — see `python3 tools/pron_rules.py ممنون`)
+#
+# After editing, rebuild just what changed and listen:
+#   python3 tools/build_audio.py --only-missing
+#   python3 tools/pron_rules.py <word>          # show before/after phonemes
+# =============================================================================
+
+# --- negative verbs: the na-/ne- prefix carries the stress -------------------
+نکنه	!first
+ندارم	!first
+نداره	!first
+نشدم	!first
+نباش	!first
+
+# --- subjunctive / imperative ب-forms (بِ- prefix is stressed) --------------
+ببند	!first
+ببینم	!first
+بخونم	!first
+بریم	!first
+بزنیم	!first
+بده	!first
+برو	!first
+
+# --- words where eSpeak picks the wrong vowel as well (respell) --------------
+# (add "@" respellings here — e.g. مهمان‌نوازی → @مِهمان‌نوازی)
+
+# --- words you disagree with (examples — delete/adjust freely) --------------
+# بیا	!last

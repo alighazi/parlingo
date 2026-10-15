@@ -1,1 +1,6 @@
 *.bak
+__pycache__/
+*.pyc
+
+# tools/neural demo output (generated comparison pages + clips)
+tools/neural/demo/
