@@ -437,10 +437,11 @@ def main() -> None:
                     help="auto = corrected stress/ezafe dictionary, stock = plain eSpeak output")
     ap.add_argument("--report", metavar="FILE", help="write the pronunciation changes to FILE")
     ap.add_argument("--rate", type=int, default=ESPEAK_RATE_WPM, help="speaking rate (words/min)")
-    ap.add_argument("--engine", choices=("espeak", "piper"), default="espeak",
-                    help="espeak = formant synthesis (default), piper = neural Persian voice")
+    ap.add_argument("--engine", choices=("espeak", "piper"), default="piper",
+                    help="piper = neural Persian voice (default, what ships), "
+                         "espeak = formant synthesis (no model download, ~15 s)")
     ap.add_argument("--piper-dict", choices=("stock", "corrected"), default="stock",
-                    help="with --engine piper: the model's own dictionary (its stock voice) "
+                    help="with --engine piper: the model's own dictionary (default, what ships) "
                          "or FarsiGo's corrected stress/ezafe dictionary")
     ap.add_argument("--slow-scale", type=float, default=1.4,
                     help="with --engine piper: how much longer the 🐢 variant is (1.35 = 35%% slower)")
