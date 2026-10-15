@@ -291,13 +291,28 @@ def compile_corrected_dictionary(entries: dict[str, str], dsource: pathlib.Path)
 # --------------------------------------------------------------------------- #
 _SPEAKER: Speaker | None = None
 _DATA_DIR: str | None = None
+_ENGINE = "espeak"                 # "espeak" | "piper"
+_VOICE = None                      # piper_engine.PiperVoice
+_BITRATE = BITRATE_KBPS
+_SLOW_SCALE = 1.4                  # piper: 1.4x longer = learner pace (matches the 95 wpm 🐢)
+_ENDING = False                    # piper clips get a fade-out + trailing silence
 
 
-def _worker_init(data_dir: str | None) -> None:
-    global _SPEAKER, _DATA_DIR
+def _worker_init(data_dir: str | None, engine: str = "espeak", slow_scale: float = 1.35,
+                 threads: int = 2) -> None:
+    global _SPEAKER, _DATA_DIR, _ENGINE, _VOICE, _SLOW_SCALE, _ENDING
     import numpy  # noqa: F401  (imported here so child processes have it)
     _DATA_DIR = data_dir
-    _SPEAKER = Speaker(pathlib.Path(data_dir) if data_dir else None)
+    _ENGINE = engine
+    _SLOW_SCALE = slow_scale
+    if engine == "piper":
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "neural"))
+        import piper_engine
+        piper_engine.provision(skip_fetch=True)
+        _VOICE = piper_engine.PiperVoice(pathlib.Path(data_dir), threads=threads)
+        _ENDING = True
+    else:
+        _SPEAKER = Speaker(pathlib.Path(data_dir) if data_dir else None)
 
 
 def _render(job):
@@ -308,35 +323,53 @@ def _render(job):
     key, synth_text, slow, rel, only_missing = job
     dest = AUDIO_DIR / rel
     if only_missing and dest.exists():
-        return key, slow, rel, False
+        return key, slow, rel, False, 0.0, 0.0
 
-    assert _SPEAKER is not None
-    _SPEAKER.set_rate(SLOW_WPM if slow else ESPEAK_RATE_WPM)
-    pcm = _SPEAKER.wav(synth_text)
-    if not pcm:
-        raise RuntimeError(f"no audio produced for {key!r}")
+    if _ENGINE == "piper":
+        assert _VOICE is not None
+        a = _VOICE.synth(synth_text, 1.0 if not slow else 1.0 / _SLOW_SCALE)
+        sr = _VOICE.sample_rate
+        if a.size == 0:
+            raise RuntimeError(f"no audio produced for {key!r}")
+    else:
+        assert _SPEAKER is not None
+        _SPEAKER.set_rate(SLOW_WPM if slow else ESPEAK_RATE_WPM)
+        pcm = _SPEAKER.wav(synth_text)
+        if not pcm:
+            raise RuntimeError(f"no audio produced for {key!r}")
+        sr = _SPEAKER.sample_rate
+        a = np.frombuffer(pcm, dtype="<i2")
 
-    sr = _SPEAKER.sample_rate
-    a = np.frombuffer(pcm, dtype="<i2")
     loud = np.nonzero(np.abs(a) > SILENCE_FLOOR)[0]
     if loud.size:                      # trim leading/trailing silence
-        head = max(0, loud[0] - int(sr * 0.035))
-        tail = min(a.size, loud[-1] + int(sr * 0.09))
+        head = max(0, loud[0] - int(sr * (0.025 if _ENGINE == "piper" else 0.035)))
+        tail = min(a.size, loud[-1] + int(sr * (0.06 if _ENGINE == "piper" else 0.09)))
         a = a[head:tail]
     peak = int(np.abs(a).max()) if a.size else 0
     if peak:
         a = (a.astype(np.float32) * (0.9 * 32767 / peak)).astype(np.int16)
 
+    if _ENDING:
+        # The neural voice often stops *at* full speech energy, which is heard as
+        # the audio being trimmed: give every clip a real ending.
+        n = int(sr * 0.025)
+        a = a.astype(np.float32).copy()
+        a[-n:] *= np.cos(np.linspace(0, np.pi / 2, n)) ** 2      # 25 ms cosine fade
+        a = np.concatenate([a, np.zeros(int(sr * 0.14), dtype=np.float32)])
+        a = np.clip(a, -32768, 32767).astype(np.int16)
+
     enc = lameenc.Encoder()
-    enc.set_bit_rate(BITRATE_KBPS)
+    enc.set_bit_rate(_BITRATE)
     enc.set_in_sample_rate(sr)
     enc.set_channels(1)
-    enc.set_quality(2)
+    enc.set_quality(2 if _BITRATE < 128 else 0)
     data = enc.encode(a.astype("<i2").tobytes()) + enc.flush()
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(bytes(data))
-    return key, slow, rel, True
+    # duration + level are the cheap health signals for a 2 828-clip render
+    level = float(np.sqrt((a.astype(np.float32) / 32768) ** 2).mean())
+    return key, slow, rel, True, a.size / sr, level
 
 
 def _silence_clip() -> None:
@@ -404,10 +437,27 @@ def main() -> None:
                     help="auto = corrected stress/ezafe dictionary, stock = plain eSpeak output")
     ap.add_argument("--report", metavar="FILE", help="write the pronunciation changes to FILE")
     ap.add_argument("--rate", type=int, default=ESPEAK_RATE_WPM, help="speaking rate (words/min)")
+    ap.add_argument("--engine", choices=("espeak", "piper"), default="espeak",
+                    help="espeak = formant synthesis (default), piper = neural Persian voice")
+    ap.add_argument("--piper-dict", choices=("stock", "corrected"), default="stock",
+                    help="with --engine piper: the model's own dictionary (its stock voice) "
+                         "or FarsiGo's corrected stress/ezafe dictionary")
+    ap.add_argument("--slow-scale", type=float, default=1.4,
+                    help="with --engine piper: how much longer the 🐢 variant is (1.35 = 35%% slower)")
+    ap.add_argument("--bitrate", type=int, default=0, help="MP3 kbps (default 32 espeak / 48 piper)")
+    ap.add_argument("--audio-dir", default="", help="output dir (default the repo's audio/)")
     args = ap.parse_args()
 
     t0 = time.time()
     ensure_deps()
+
+    global AUDIO_DIR, MANIFEST, BUILD_INFO, _BITRATE
+    if args.audio_dir:
+        AUDIO_DIR = pathlib.Path(args.audio_dir)
+        MANIFEST = AUDIO_DIR / "index.js"
+        BUILD_INFO = AUDIO_DIR / "build-info.json"
+    bitrate = args.bitrate or (48 if args.engine == "piper" else BITRATE_KBPS)
+    _BITRATE = bitrate
     strings, slow_list = collect_strings()
     if args.limit:
         strings, slow_list = strings[:args.limit], slow_list[:args.limit]
@@ -418,7 +468,39 @@ def main() -> None:
     respell: dict[str, str] = {}
     rules = None
     fingerprint_extra: dict = {}
-    if args.pron == "auto":
+    piper = None
+    if args.engine == "piper":
+        sys.path.insert(0, str(ROOT / "tools" / "neural"))
+        import piper_engine
+        print("→ neural engine: provisioning sherpa-onnx + the Persian Piper voice …")
+        piper_engine.provision()
+        if piper_engine.ensure_loader_path() and not os.environ.get("PARLINGO_REEXEC"):
+            # ld.so reads LD_LIBRARY_PATH at startup only, so restart with it set
+            os.environ["PARLINGO_REEXEC"] = "1"
+            os.execv(sys.executable, [sys.executable, *sys.argv])
+        piper_engine.fetch_model()
+        if args.piper_dict == "corrected":
+            fingerprint_extra = {"model": piper_engine.PIPER_MODEL_CARD,
+                                 "modelFingerprint": piper_engine.model_fingerprint(),
+                                 "piperDict": "corrected"}
+            rules, entries, dsource, report = build_pronunciation(strings)
+            data_dir = piper_engine.compiled_data_dir(entries, dsource)
+            fingerprint_extra.update({"rules": rules.version, "words": len(entries)})
+            if args.report:
+                fixed_speaker = Speaker(data_dir)
+                with open(args.report, "w", encoding="utf-8") as fh:
+                    fh.write("# word\tspoken text\tbefore (stock eSpeak)\tafter (this build)\n")
+                    for word, before_ipa, phonemes, _ in report:
+                        spoken = rules.respell_text(word)
+                        fh.write(f"{word}\t{spoken}\t{before_ipa}\t{fixed_speaker.phonemes(spoken, 2)}\n")
+                print(f"→ report written to {args.report} ({len(report)} words)")
+        else:
+            data_dir = piper_engine.stock_data_dir()
+            fingerprint_extra = {"model": piper_engine.PIPER_MODEL_CARD,
+                                 "modelFingerprint": piper_engine.model_fingerprint(),
+                                 "piperDict": "stock",
+                                 "lengthScale": 1.0, "slowScale": args.slow_scale}
+    elif args.pron == "auto":
         rules, entries, dsource, report = build_pronunciation(strings)
         data_dir = compile_corrected_dictionary(entries, dsource)
         fingerprint_extra = {"rules": rules.version, "words": len(entries),
@@ -438,8 +520,14 @@ def main() -> None:
         return rules.respell_text(text) if rules else text
 
     # ---- rebuild detection ---------------------------------------------------
-    engine = {"engine": "espeak-ng fa", "rate": args.rate, "slowRate": SLOW_WPM,
-              "bitrateKbps": BITRATE_KBPS, "pron": args.pron, **fingerprint_extra}
+    if args.engine == "piper":
+        engine = {"engine": piper_engine.DESCRIPTION, "lengthScale": 1.0,
+                  "slowLengthScale": args.slow_scale, "bitrateKbps": bitrate,
+                  "engineKind": "piper", **fingerprint_extra}
+    else:
+        engine = {"engine": "espeak-ng fa", "rate": args.rate, "slowRate": SLOW_WPM,
+                  "bitrateKbps": bitrate, "pron": args.pron, "engineKind": "espeak",
+                  **fingerprint_extra}
     fingerprint = hashlib.sha1(json.dumps(engine, sort_keys=True).encode()).hexdigest()[:12]
     previous = {}
     if BUILD_INFO.exists():
@@ -469,22 +557,45 @@ def main() -> None:
     AUDIO_DIR.mkdir(exist_ok=True)
     _silence_clip()
 
-    print(f"→ synthesising {len(jobs)} clips with eSpeak-NG (fa) …")
-    done = 0
+    engine_label = piper_engine.DESCRIPTION if args.engine == "piper" else "eSpeak-NG (fa)"
+    print(f"→ synthesising {len(jobs)} clips with {engine_label} …")
+    done, health = 0, []          # (duration, level, key, slow)
+    threads = 1 if args.jobs > 1 else 4
+    init_args = (str(data_dir) if data_dir else None, args.engine, args.slow_scale, threads)
     from multiprocessing import Pool
     if args.jobs <= 1:
-        _worker_init(str(data_dir) if data_dir else None)
+        _worker_init(*init_args)
         for job in jobs:
-            _render(job)
+            res = _render(job)
+            if res[3]:
+                health.append((res[4], res[5], res[0], res[1]))
             done += 1
             if done % 200 == 0:
                 print(f"   {done}/{len(jobs)}")
     else:
-        with Pool(args.jobs, initializer=_worker_init, initargs=(str(data_dir) if data_dir else None,)) as pool:
-            for _ in pool.imap_unordered(_render, jobs, chunksize=8):
+        with Pool(args.jobs, initializer=_worker_init, initargs=init_args) as pool:
+            for res in pool.imap_unordered(_render, jobs, chunksize=8):
+                if res[3]:
+                    health.append((res[4], res[5], res[0], res[1]))
                 done += 1
                 if done % 400 == 0:
                     print(f"   {done}/{len(jobs)}")
+
+    # health check: a silent or stunted clip means the voice failed on that string
+    if health:
+        import statistics
+        durs = [h[0] for h in health]
+        silent = [h for h in health if h[1] < 0.004]
+        short = [h for h in health if h[0] < 0.12]
+        long_ = [h for h in health if h[0] > 12]
+        print(f"   health: {len(health)} clips, median {statistics.median(durs):.2f}s, "
+              f"{len(silent)} near-silent, {len(short)} under 0.12s, {len(long_)} over 12s")
+        for label, group in (("near-silent", silent), ("too short", short), ("suspiciously long", long_)):
+            for _, level, key, slow in group[:5]:
+                print(f"     ⚠ {label}: {key!r}{' (slow)' if slow else ''} "
+                      f"level={level:.4f} dur={[h[0] for h in group if h[2]==key][0]:.2f}s")
+        if len(silent) + len(short) > max(3, len(health) * 0.01):
+            raise SystemExit("refusing to finish: too many clips look broken — inspect the list above")
 
     write_manifest(manifest, manifest_slow, {**engine, "fingerprint": fingerprint,
                                              "clips": len(manifest), "slowClips": len(manifest_slow)})
@@ -501,7 +612,7 @@ def main() -> None:
         print(f"→ removed {len(orphans)} orphaned clip(s)")
 
     total = sum(f.stat().st_size for f in AUDIO_DIR.rglob("*.mp3"))
-    print(f"✓ {len(manifest)} clips (+{len(manifest_slow)} slow) in audio/ — "
+    print(f"✓ {len(manifest)} clips (+{len(manifest_slow)} slow) in {AUDIO_DIR.name}/ — "
           f"{total / 1048576:.1f} MB, manifest audio/index.js — {time.time() - t0:.0f}s")
 
 

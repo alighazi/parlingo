@@ -5,6 +5,9 @@ corrected Persian dictionary — see `readme.md` §11. This folder builds a
 listening comparison against a **neural** Persian voice (Piper/VITS) so the
 switch can be judged by ear before committing to it.
 
+> **The shipping path is `tools/build_audio.py --engine piper`** — this folder is
+> the experiment that chose it. See readme.md §11 (*Voices*).
+
 ## Build
 
 ```bash
