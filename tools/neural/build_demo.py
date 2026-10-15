@@ -52,7 +52,9 @@ NEURAL = CACHE / "neural"
 PIPER = NEURAL / "piper_fa"
 PYLIBS = NEURAL / "pylibs"
 WHEELS = CACHE / "wheels" / "neural"
-DEMO = pathlib.Path(os.environ.get("NEURAL_DEMO_DIR", "/home/user/neural-demo"))
+# inside the repo (gitignored): a previous copy lived outside it and was wiped
+# by every sandbox reset
+DEMO = pathlib.Path(os.environ.get("NEURAL_DEMO_DIR", ROOT / "tools" / "neural" / "demo"))
 
 # numpy/lameenc (repo cache) and sherpa-onnx/onnxruntime (neural cache)
 for _p in (str(CACHE / "pylibs"), str(PYLIBS)):
@@ -132,6 +134,37 @@ def provision(skip_fetch: bool = False) -> None:
             (capi / "libonnxruntime.so").symlink_to(so[0].name)
         print("   neural runtime ready")
     _refresh_import_paths()
+
+
+PREVIOUS_PACK_COMMIT = os.environ.get("NEURAL_PREV_COMMIT", "8ce3bf2")
+
+
+def previous_pack_clips(texts: list[str], dests: list[pathlib.Path]) -> None:
+    """Column A: the previous eSpeak pack's MP3s, straight out of git history.
+
+    Deliberately NOT re-synthesised: eSpeak-NG is a singleton and shares no
+    process safely with the Piper voice (different espeak-ng-data vintage —
+    in-process mixing segfaulted, and a subprocess run hung inside synthesis on
+    the second phrase). The blobs in git *are* the pack that shipped, so this is
+    also more faithful than a fresh render. Filenames are sha1 of the text, so
+    the mapping is stable across packs.
+    """
+    import re
+    commit = PREVIOUS_PACK_COMMIT
+    if subprocess.run(["git", "cat-file", "-e", commit], cwd=ROOT).returncode != 0:
+        raise SystemExit(f"column A needs the previous pack: commit {commit} is not in this clone")
+    manifest = subprocess.run(["git", "show", f"{commit}:audio/index.js"],
+                              cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    mapping: dict[str, str] = {}
+    for key, rel in re.findall(r'"([^"]+)":"(audio/[^"]+)"', manifest):
+        mapping.setdefault(key, rel)          # first wins: the fast clip, not the 🐢 one
+    for text, dest in zip(texts, dests):
+        rel = mapping.get(" ".join(text.split()))
+        if not rel:
+            raise SystemExit(f"no clip for {text!r} in the previous pack")
+        dest.write_bytes(subprocess.run(["git", "show", f"{commit}:{rel}"],
+                                        cwd=ROOT, capture_output=True, check=True).stdout)
+    print(f"   column A: {len(texts)} clips extracted from {commit} (the previous eSpeak pack)")
 
 
 def _loadpackage_meta(loader: str) -> dict:
@@ -312,7 +345,7 @@ def abc_page(uri) -> str:
     rows = []
     for i, (phrase, gloss) in enumerate(PHRASES):
         tracks = []
-        for tag, cls, label in (("A", "a", "shipped pack · eSpeak-NG, corrected stress"),
+        for tag, cls, label in (("A", "a", "previous pack · eSpeak-NG + corrected stress (from git)"),
                                 ("B", "b", "neural Piper · its own dictionary"),
                                 ("C", "c", "neural Piper + FarsiGo's stress fixes")):
             tracks.append(f"""<div class="track"><span class="tag {cls}">{tag}</span>
@@ -323,14 +356,15 @@ def abc_page(uri) -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FarsiGo — neural voice vs. the shipped eSpeak pack</title>
 <style>{STYLE}</style></head><body><main>
-<h1>Neural voice vs. the shipped pack</h1>
-<p class="sub">Same Persian text, three renderings — headphones recommended. Pick the voice you want in the app.</p>
+<h1>Neural voice vs. the previous eSpeak pack</h1>
+<p class="sub">Same Persian text, three renderings — headphones recommended. This page is the record of the choice: the app now ships column B.</p>
 {''.join(rows)}
 <div class="foot">
-<p><b>A</b> — what ships today: eSpeak-NG Persian formant synthesis with this repo's corrected stress dictionary (2 828 clips, 20 MB, fully offline).</p>
+<p><b>A</b> — the previous voice: eSpeak-NG formant synthesis with this repo's corrected stress dictionary (2 828 clips, 21 MB, fully offline).</p>
 <p><b>B</b> — the neural Persian Piper voice (VITS, 60 MB, 22 050 Hz) driven by its own stock eSpeak dictionary.</p>
 <p><b>C</b> — the same neural model with FarsiGo's pronunciation fixes compiled into its dictionary: the stress rules, the ezafe linker (شبِ یلدا، آبِ خنک) and the ZWNJ join, applied before synthesis.</p>
-<p>Neural clips now end with a 25 ms fade-out and 140 ms of silence, because the model's raw output often stops at full voice.</p>
+<p><b>Shipped:</b> <code>python3 tools/build_audio.py --engine piper --piper-dict stock</code> — column B, 2 828 clips, 16 MB. Use <code>--piper-dict corrected</code> for column C, or <code>--engine espeak</code> to go back to column A.</p>
+<p>Neural clips end with a 25 ms fade-out and 140 ms of silence, because the model's raw output often stops at full voice.</p>
 <p>Model: <code>gyroing/Persian-Piper-TTS-WebAssembly</code> (voice card <code>gyroing/Persian-Piper-Model-gyro</code>); inference with sherpa-onnx 1.13.4 on CPU, ≈0.1 s per clip.</p>
 </div></main></body></html>"""
 
@@ -401,6 +435,7 @@ def main() -> None:
     rules, entries, dsource, _ = ba.build_pronunciation(strings, verbose=False)
     corr_dir = corrected_data_dir(rules, entries, dsource)
 
+    import numpy as np               # noqa: E402  (importable only after provision())
     print("5. rendering (one process per dictionary — eSpeak is a singleton)")
     plain = [p for p, _ in PHRASES]
     respelled = [rules.respell_text(p) for p in plain]
@@ -426,17 +461,8 @@ def main() -> None:
         encode_mp3(samples, dest)
         mp3_info[key] = (dest, len(samples) / SR, end_level(samples))
 
-    # A — copies of the shipped clips; B/C — neural, with the proper ending
-    manifest = json.loads(subprocess.run(
-        ["node", "-e", "const fs=require('fs');"
-                      "eval(fs.readFileSync('audio/index.js','utf8').replace(/const FA_AUDIO/g,'global.FA_AUDIO'));"
-                      "console.log(JSON.stringify(global.FA_AUDIO));"],
-        cwd=ROOT, capture_output=True, text=True, check=True).stdout)
-    for i, (phrase, _) in enumerate(PHRASES):
-        rel = manifest.get(" ".join(phrase.split()))
-        if not rel:
-            raise SystemExit(f"no shipped clip for {phrase!r}")
-        shutil.copyfile(ROOT / rel, DEMO / f"A{i:02d}.mp3")
+    # A — the previous pack's clips from git history; B/C — neural, freshly rendered
+    previous_pack_clips(plain, [DEMO / f"A{i:02d}.mp3" for i in range(len(PHRASES))])
     for tag, src_dir, texts in (("B", r_stock_100, plain), ("C", r_corr_100, respelled)):
         for i in range(len(PHRASES)):
             encode_mp3(normalise(load_wav(src_dir / f"{i:02d}.wav"), fade_ms=FADE_MS, end_silence_ms=SILENCE_MS),
