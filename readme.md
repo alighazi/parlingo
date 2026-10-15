@@ -429,7 +429,12 @@ node tools/audit_audio.mjs                    # verify every 🔊 has a file
 **Building audio is separate from deploying.** `install.sh` only publishes the
 site (it copies `index.html`, `app.js`, the data files and the already-built
 `audio/` pack to the web root and writes an Nginx server block) — it never
-synthesises anything, with Piper or otherwise. The pack is committed to the
+synthesises anything, with Piper or otherwise. Run it from the repository root:
+
+```bash
+./install.sh --install     # Debian/Ubuntu: installs Nginx, then deploys to :8080
+./install.sh               # Nginx already installed
+``` The pack is committed to the
 repository, so a deploy needs no model and no build step; re-render it only if
 the content or the voice changes.
 
