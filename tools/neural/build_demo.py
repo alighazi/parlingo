@@ -42,6 +42,7 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
+import wave
 import zipfile
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -85,6 +86,21 @@ PHRASES = [
 
 
 # --------------------------------------------------------------- provisioning --
+def _refresh_import_paths() -> None:
+    """Forget cached "this path does not exist" import results.
+
+    On a cold cache the pylibs directory does not exist while Python first scans
+    sys.path, so it stores None in sys.path_importer_cache for that entry; the
+    files unpacked into it later stay invisible until the entry is dropped.
+    """
+    import importlib
+    for p in (str(CACHE / "pylibs"), str(PYLIBS)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+        sys.path_importer_cache.pop(p, None)
+    importlib.invalidate_caches()
+
+
 def provision(skip_fetch: bool = False) -> None:
     """eSpeak-NG + numpy/lameenc via the repo builder, then the neural runtime."""
     sys.path.insert(0, str(ROOT / "tools"))
@@ -115,6 +131,7 @@ def provision(skip_fetch: bool = False) -> None:
         if so and not (capi / "libonnxruntime.so").exists():
             (capi / "libonnxruntime.so").symlink_to(so[0].name)
         print("   neural runtime ready")
+    _refresh_import_paths()
 
 
 def _loadpackage_meta(loader: str) -> dict:
